@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Context Engineering Workbench</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; background: #060610; }
+  body { font-family: 'Inter', sans-serif; color: #e2e8f0; overflow: hidden; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0a0a15; }
+  ::-webkit-scrollbar-thumb { background: #1e1e35; border-radius: 3px; }
+  @keyframes bounce {
+    0%, 80%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-6px); }
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  textarea { transition: border-color 0.2s, background 0.2s; }
+  textarea:focus { background: #0a0a18 !important; }
+  #loading {
+    position: fixed; inset: 0; background: #060610;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; z-index: 999;
+  }
+  #loading .dots { display: flex; gap: 6px; }
+  #loading .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #7C3AED;
+    animation: bounce 1s infinite;
+  }
+  #loading .dot:nth-child(2) { animation-delay: .15s; }
+  #loading .dot:nth-child(3) { animation-delay: .30s; }
+  #loading p { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #374151; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="dots">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+  </div>
+  <p>Initialising workbench…</p>
+</div>
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useCallback, useEffect } = React;
+
+const estimateTokens = (text) => Math.max(1, Math.ceil((text || "").length / 4));
+
+const LAYER_DEFS = [
+  { id: "role",         label: "Role & Persona",        color: "#7C3AED", accent: "#A78BFA", placeholder: "Define who the AI is…" },
+  { id: "instructions", label: "Instructions & Rules",  color: "#0F766E", accent: "#2DD4BF", placeholder: "Precise rules, output format, constraints…" },
+  { id: "memory",       label: "Memory & History",      color: "#B45309", accent: "#FCD34D", placeholder: "Past context, prior decisions, patterns…" },
+  { id: "tools",        label: "Tools & Capabilities",  color: "#0369A1", accent: "#38BDF8", placeholder: "Available tools, APIs, functions…" },
+  { id: "state",        label: "State & Environment",   color: "#BE185D", accent: "#F472B6", placeholder: "Current date, system state, runtime vars…" },
+  { id: "examples",     label: "Examples (Few-Shot)",   color: "#047857", accent: "#34D399", placeholder: "Concrete input/output examples…" },
+  { id: "query",        label: "User Query / Input",    color: "#6D28D9", accent: "#C4B5FD", placeholder: "The actual question or data…" },
+];
+
+// ── Token Bar ────────────────────────────────────────────────────────────────
+function TokenBar({ tokens, maxTokens = 4000, color }) {
+  const pct  = Math.min((tokens / maxTokens) * 100, 100);
+  const warn = pct > 75;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ flex: 1, height: 4, background: "#1e1e2e", borderRadius: 4, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: warn ? "#f59e0b" : color, borderRadius: 4, transition: "width 0.3s ease" }} />
+      </div>
+      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: warn ? "#f59e0b" : "#6b7280", minWidth: 58, textAlign: "right" }}>
+        ~{tokens.toLocaleString()} tok
+      </span>
+    </div>
+  );
+}
+
+// ── Layer Card ───────────────────────────────────────────────────────────────
+function LayerCard({ layer, value, enabled, onChange, onToggle, index }) {
+  const tokens = estimateTokens(value);
+  const [expanded, setExpanded] = useState(true);
+
+  return (
+    <div style={{
+      background: enabled ? "#0f0f1a" : "#080810",
+      border: `1px solid ${enabled ? layer.color + "55" : "#1e1e2e"}`,
+      borderRadius: 12, overflow: "hidden",
+      transition: "all 0.3s ease", opacity: enabled ? 1 : 0.45,
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+        background: enabled ? layer.color + "18" : "transparent",
+        borderBottom: `1px solid ${enabled ? layer.color + "33" : "#1e1e2e"}`,
+      }}>
+        <div style={{
+          width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+          background: enabled ? layer.color : "#1e1e2e",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 11, fontWeight: 700, color: "#fff", transition: "background 0.3s",
+        }}>
+          {index + 1}
+        </div>
+
+        <div style={{ flex: 1, cursor: "pointer" }} onClick={() => setExpanded(e => !e)}>
+          <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: enabled ? layer.accent : "#4b5563" }}>
+            {layer.label}
+          </div>
+          {!expanded && (
+            <div style={{ fontSize: 10, color: "#4b5563", marginTop: 1 }}>
+              {value.slice(0, 70)}{value.length > 70 ? "…" : ""}
+            </div>
+          )}
+        </div>
+
+        <div style={{
+          fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
+          color: enabled ? layer.accent + "cc" : "#374151",
+          background: enabled ? layer.color + "22" : "#111",
+          padding: "2px 8px", borderRadius: 20,
+          border: `1px solid ${enabled ? layer.color + "44" : "#1e1e2e"}`,
+        }}>
+          ~{tokens} tok
+        </div>
+
+        <button onClick={() => setExpanded(e => !e)} style={{ background: "none", border: "none", cursor: "pointer", color: "#4b5563", fontSize: 12, padding: "0 2px" }}>
+          {expanded ? "▲" : "▼"}
+        </button>
+
+        <div onClick={onToggle} style={{
+          width: 36, height: 20, borderRadius: 10, cursor: "pointer", flexShrink: 0,
+          background: enabled ? layer.color : "#1e1e2e",
+          border: `1px solid ${enabled ? layer.color : "#374151"}`,
+          position: "relative", transition: "all 0.25s ease",
+        }}>
+          <div style={{
+            width: 14, height: 14, borderRadius: "50%", background: "#fff",
+            position: "absolute", top: 2, left: enabled ? 18 : 2,
+            transition: "left 0.25s ease", boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
+          }} />
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={{ padding: "10px 14px 12px" }}>
+          <textarea
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            disabled={!enabled}
+            placeholder={layer.placeholder}
+            style={{
+              width: "100%", minHeight: 90, resize: "vertical",
+              background: "#07070f",
+              border: `1px solid ${enabled ? layer.color + "33" : "#1a1a2e"}`,
+              borderRadius: 8, padding: "10px 12px",
+              color: enabled ? "#e2e8f0" : "#374151",
+              fontSize: 12, fontFamily: "'JetBrains Mono', monospace",
+              lineHeight: 1.6, outline: "none", boxSizing: "border-box",
+            }}
+            onFocus={e => { if (enabled) e.target.style.borderColor = layer.color + "88"; }}
+            onBlur={e => { e.target.style.borderColor = enabled ? layer.color + "33" : "#1a1a2e"; }}
+          />
+          <div style={{ marginTop: 6 }}>
+            <TokenBar tokens={tokens} color={layer.color} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Token Summary ────────────────────────────────────────────────────────────
+function TokenSummary({ layers, values, enabled }) {
+  const MAX   = 8000;
+  const total = layers.reduce((s, l) => s + (enabled[l.id] ? estimateTokens(values[l.id]) : 0), 0);
+  const pct   = Math.min((total / MAX) * 100, 100);
+
+  return (
+    <div style={{ background: "#0a0a15", border: "1px solid #1e1e35", borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={{ fontSize: 10, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+          Total Context Budget
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 13, fontFamily: "'JetBrains Mono', monospace", color: pct > 80 ? "#f59e0b" : "#a78bfa", fontWeight: 700 }}>
+            ~{total.toLocaleString()}
+          </span>
+          <span style={{ fontSize: 10, color: "#374151" }}>/ {MAX.toLocaleString()} tok</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", height: 8, borderRadius: 6, overflow: "hidden", background: "#111", gap: 1, marginBottom: 10 }}>
+        {layers.map(l => {
+          const lp = enabled[l.id] ? (estimateTokens(values[l.id]) / MAX) * 100 : 0;
+          return lp > 0 ? (
+            <div key={l.id} title={`${l.label}: ~${estimateTokens(values[l.id])} tokens`}
+              style={{ width: `${lp}%`, background: l.color, transition: "width 0.3s ease" }} />
+          ) : null;
+        })}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "5px 12px" }}>
+        {layers.map(l => {
+          const t = enabled[l.id] ? estimateTokens(values[l.id]) : 0;
+          return (
+            <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 4, opacity: enabled[l.id] ? 1 : 0.3 }}>
+              <div style={{ width: 7, height: 7, borderRadius: 2, background: l.color }} />
+              <span style={{ fontSize: 9, color: "#6b7280" }}>{l.label}</span>
+              <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono', monospace", color: l.accent }}>
+                {t > 0 ? `~${t}` : "—"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Output Panel ─────────────────────────────────────────────────────────────
+function OutputPanel({ output, loading, error, inputTokens, outputTokens }) {
+  const formatOutput = (text) => {
+    const clean = text.replace(/```json|```/g, "").trim();
+    try {
+      const parsed = JSON.parse(clean);
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {Object.entries(parsed).map(([k, v]) => (
+            <div key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "7px 10px", background: "#07070f", border: "1px solid #1e1e2e", borderRadius: 8 }}>
+              <span style={{ fontSize: 9, color: "#7C3AED", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.08em", minWidth: 130, paddingTop: 2, fontWeight: 600, flexShrink: 0 }}>
+                {k}
+              </span>
+              <span style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>
+                {typeof v === "number" ? v.toFixed(2) : String(v)}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    } catch {
+      return <pre style={{ fontSize: 11, color: "#cbd5e1", lineHeight: 1.7, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{text}</pre>;
+    }
+  };
+
+  return (
+    <div style={{ background: "#0a0a15", border: "1px solid #1e1e35", borderRadius: 12, overflow: "hidden" }}>
+      <div style={{ padding: "9px 14px", background: "#0d0d1f", borderBottom: "1px solid #1e1e35", display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{
+          width: 8, height: 8, borderRadius: "50%",
+          background: loading ? "#f59e0b" : output ? "#34d399" : "#374151",
+          boxShadow: loading ? "0 0 6px #f59e0b" : output ? "0 0 6px #34d399" : "none",
+          animation: loading ? "pulse 1s infinite" : "none",
+        }} />
+        <span style={{ fontSize: 10, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>LLM Output</span>
+        {(inputTokens > 0 || outputTokens > 0) && (
+          <span style={{ marginLeft: "auto", fontSize: 9, color: "#374151", fontFamily: "'JetBrains Mono', monospace" }}>
+            in: {inputTokens} · out: {outputTokens} tok
+          </span>
+        )}
+      </div>
+      <div style={{ padding: 14, minHeight: 110 }}>
+        {loading && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {[0,1,2].map(i => (
+              <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: "#7C3AED", animation: `bounce 1s infinite ${i * 0.15}s` }} />
+            ))}
+            <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 4 }}>Calling LLM with engineered context…</span>
+          </div>
+        )}
+        {error && (
+          <div style={{ padding: "9px 12px", background: "#1a0a0a", border: "1px solid #7f1d1d", borderRadius: 8, fontSize: 12, color: "#fca5a5" }}>
+            {error}
+          </div>
+        )}
+        {!loading && !error && output && formatOutput(output)}
+        {!loading && !error && !output && (
+          <p style={{ fontSize: 12, color: "#374151", fontStyle: "italic" }}>Configure your context layers and click Run →</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Context Preview ──────────────────────────────────────────────────────────
+function ContextPreview({ values, enabled }) {
+  const [open, setOpen] = useState(false);
+  const buildRaw = () => {
+    const sys = [], usr = [];
+    if (enabled["role"])         sys.push(`## Role\n${values["role"]}`);
+    if (enabled["instructions"]) sys.push(`## Instructions\n${values["instructions"]}`);
+    if (enabled["tools"])        sys.push(`## Available Tools\n${values["tools"]}`);
+    if (enabled["examples"])     sys.push(`## Examples\n${values["examples"]}`);
+    if (enabled["memory"])       usr.push(`### Memory & History\n${values["memory"]}`);
+    if (enabled["state"])        usr.push(`### Current State\n${values["state"]}`);
+    if (enabled["query"])        usr.push(`### Query\n${values["query"]}`);
+    return `[SYSTEM]\n${sys.join("\n\n") || "(empty)"}\n\n[USER]\n${usr.join("\n\n") || "(empty)"}`;
+  };
+  return (
+    <div style={{ background: "#0a0a15", border: "1px solid #1e1e35", borderRadius: 12, overflow: "hidden" }}>
+      <div onClick={() => setOpen(o => !o)} style={{ padding: "9px 14px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 10, color: "#4b5563", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600 }}>◎ Raw Context Preview</span>
+        <span style={{ fontSize: 10, color: "#374151" }}>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div style={{ padding: "0 14px 12px" }}>
+          <pre style={{ fontSize: 9, color: "#374151", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "pre-wrap", lineHeight: 1.5, maxHeight: 200, overflowY: "auto" }}>
+            {buildRaw()}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ─────────────────────────────────────────────────────────────────
+function ContextWorkbench() {
+  const [values,       setValues]       = useState(Object.fromEntries(LAYER_DEFS.map(l => [l.id, ""])));
+  const [enabled,      setEnabled]      = useState(Object.fromEntries(LAYER_DEFS.map(l => [l.id, true])));
+  const [apiKey,       setApiKey]       = useState("");
+  const [output,       setOutput]       = useState("");
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState("");
+  const [inputTokens,  setInputTokens]  = useState(0);
+  const [outputTokens, setOutputTokens] = useState(0);
+  const [ready,        setReady]        = useState(false);
+
+  useEffect(() => {
+    fetch("/api/defaults")
+      .then(r => r.json())
+      .then(data => {
+        setValues(Object.fromEntries(LAYER_DEFS.map(l => [l.id, data[l.id] || ""])));
+        setReady(true);
+        document.getElementById("loading").style.display = "none";
+      })
+      .catch(() => {
+        setReady(true);
+        document.getElementById("loading").style.display = "none";
+      });
+  }, []);
+
+  const toggleLayer = useCallback((id) => setEnabled(e => ({ ...e, [id]: !e[id] })), []);
+  const enableAll   = () => setEnabled(Object.fromEntries(LAYER_DEFS.map(l => [l.id, true])));
+  const disableAll  = () => setEnabled(Object.fromEntries(LAYER_DEFS.map(l => [l.id, false])));
+
+  const handleRun = async () => {
+    if (!apiKey.trim()) { setError("Please enter your Anthropic API key."); return; }
+    if (!Object.values(enabled).some(Boolean)) { setError("Enable at least one context layer."); return; }
+    setLoading(true); setOutput(""); setError(""); setInputTokens(0); setOutputTokens(0);
+    try {
+      const resp = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: apiKey, layers: values, enabled }),
+      });
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      setOutput(data.output || "No response");
+      setInputTokens(data.input_tokens || 0);
+      setOutputTokens(data.output_tokens || 0);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const activeCount = Object.values(enabled).filter(Boolean).length;
+  const totalTokens = LAYER_DEFS.reduce((s, l) => s + (enabled[l.id] ? estimateTokens(values[l.id]) : 0), 0);
+
+  if (!ready) return null;
+
+  return (
+    <div style={{ height: "100vh", background: "#060610", color: "#e2e8f0", display: "flex", flexDirection: "column" }}>
+
+      {/* Top bar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 14, background: "#0d0d1f", borderBottom: "1px solid #1e1e35", padding: "0 20px", height: 54, flexShrink: 0 }}>
+        <span style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 16, whiteSpace: "nowrap" }}>
+          ◈ Context Engineering Workbench
+        </span>
+        <span style={{ fontSize: 9, color: "#7C3AED", background: "#1a0f35", border: "1px solid #3d1f7a", padding: "2px 7px", borderRadius: 20, fontFamily: "'JetBrains Mono', monospace" }}>
+          Flask + React
+        </span>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 10, flex: 1, maxWidth: 320 }}>
+          <span style={{ fontSize: 10, color: "#6b7280", whiteSpace: "nowrap" }}>API Key</span>
+          <input
+            type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+            placeholder="sk-ant-…"
+            style={{ flex: 1, background: "#0f0f1a", border: "1px solid #1e1e35", borderRadius: 7, color: "#e2e8f0", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, padding: "5px 10px", outline: "none" }}
+            onFocus={e => e.target.style.borderColor = "#7C3AED"}
+            onBlur={e => e.target.style.borderColor = "#1e1e35"}
+          />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <button onClick={enableAll} style={{ background: "#064e3b", border: "1px solid #065f46", color: "#34d399", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+            Enable All
+          </button>
+          <button onClick={disableAll} style={{ background: "#450a0a", border: "1px solid #7f1d1d", color: "#f87171", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+            Disable All
+          </button>
+          <button onClick={handleRun} disabled={loading} style={{
+            padding: "7px 20px", borderRadius: 9,
+            background: loading ? "#1e1e35" : "linear-gradient(135deg, #7C3AED, #4F46E5)",
+            border: "none", color: "#fff", fontSize: 13, fontWeight: 700,
+            cursor: loading ? "not-allowed" : "pointer",
+            boxShadow: loading ? "none" : "0 0 18px #7C3AED44",
+            display: "flex", alignItems: "center", gap: 8,
+          }}>
+            {loading
+              ? <><span style={{ animation: "pulse 1s infinite" }}>●</span> Running…</>
+              : <>&#9654; Run <span style={{ fontSize: 9, background: "rgba(255,255,255,.15)", padding: "2px 6px", borderRadius: 5, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {activeCount} layers · ~{totalTokens} tok
+                </span></>
+            }
+          </button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 370px", flex: 1, overflow: "hidden" }}>
+
+        {/* Left — Layer cards */}
+        <div style={{ overflowY: "auto", padding: "14px 12px", display: "flex", flexDirection: "column", gap: 10, borderRight: "1px solid #1e1e35" }}>
+          <TokenSummary layers={LAYER_DEFS} values={values} enabled={enabled} />
+          {LAYER_DEFS.map((layer, i) => (
+            <div key={layer.id} style={{ animation: `fadeIn 0.35s ease ${i * 0.04}s both` }}>
+              <LayerCard
+                layer={layer} value={values[layer.id]} enabled={enabled[layer.id]}
+                onChange={v => setValues(prev => ({ ...prev, [layer.id]: v }))}
+                onToggle={() => toggleLayer(layer.id)} index={i}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Right — Stats + Output */}
+        <div style={{ overflowY: "auto", padding: "14px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+
+          {/* Stats row */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0a15", border: "1px solid #1e1e35", borderRadius: 12, padding: "12px 8px" }}>
+            {[
+              { label: "Active Layers", val: activeCount,                        color: "#a78bfa" },
+              { label: "Total Tokens",  val: `~${totalTokens.toLocaleString()}`, color: "#2dd4bf" },
+              { label: "Disabled",      val: LAYER_DEFS.length - activeCount,    color: "#f87171" },
+            ].map(s => (
+              <div key={s.label} style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 20, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.val}</div>
+                <div style={{ fontSize: 9, color: "#6b7280", textTransform: "uppercase", letterSpacing: ".07em", marginTop: 3 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Per-layer breakdown */}
+          <div style={{ background: "#0a0a15", border: "1px solid #1e1e35", borderRadius: 12, padding: "12px 14px" }}>
+            <div style={{ fontSize: 9, color: "#4b5563", textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600, marginBottom: 8 }}>Token Breakdown</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {LAYER_DEFS.map(l => {
+                const t = estimateTokens(values[l.id]);
+                const on = enabled[l.id];
+                return (
+                  <div key={l.id} style={{ opacity: on ? 1 : 0.3, transition: "opacity 0.2s" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                      <span style={{ fontSize: 10, color: l.accent, fontWeight: 600 }}>{l.label}</span>
+                      <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono', monospace", color: on ? l.accent : "#374151" }}>{on ? `~${t}` : "off"}</span>
+                    </div>
+                    <TokenBar tokens={on ? t : 0} color={l.color} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <OutputPanel output={output} loading={loading} error={error} inputTokens={inputTokens} outputTokens={outputTokens} />
+          <ContextPreview values={values} enabled={enabled} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<ContextWorkbench />);
+</script>
+</body>
+</html>
